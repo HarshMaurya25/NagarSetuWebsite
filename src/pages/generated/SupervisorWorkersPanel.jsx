@@ -274,7 +274,6 @@ export default function SupervisorWorkersPanel() {
                       )}
                     </div>
                   </div>
-                </>
               )}
             </section>
           )}

@@ -161,7 +161,7 @@ function StyledSelect({ value, onChange, children, icon }) {
 
 export default function AdminWardsMap() {
   const navigate = useNavigate();
-  const mapRef = useRef(null);
+  const [mapInstance, setMapInstance] = useState(null);
   const mapNodeRef = useRef(null);
   const issueLayerRef = useRef(null);
   const wardLayerRef = useRef(null);
@@ -305,28 +305,28 @@ export default function AdminWardsMap() {
   ]);
 
   useEffect(() => {
-    if (!mapNodeRef.current || mapRef.current) return;
+    if (!mapNodeRef.current || mapInstance) return;
 
-    mapRef.current = L.map(mapNodeRef.current, {
+    const map = L.map(mapNodeRef.current, {
       zoomControl: false,
     }).setView([28.6139, 77.209], 11);
 
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: "© OpenStreetMap contributors",
       maxZoom: 19,
-    }).addTo(mapRef.current);
+    }).addTo(map);
 
     // Add zoom control to bottom-right
-    L.control.zoom({ position: "bottomright" }).addTo(mapRef.current);
+    L.control.zoom({ position: "bottomright" }).addTo(map);
 
     // Try user geolocation for city-level view
     if (navigator?.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          if (!mapRef.current) return;
+          if (!map) return;
           const { latitude: lat, longitude: lng } = pos.coords;
           if (typeof lat === "number" && typeof lng === "number") {
-            mapRef.current.setView([lat, lng], 11);
+            map.setView([lat, lng], 11);
           }
         },
         () => {},
@@ -334,19 +334,21 @@ export default function AdminWardsMap() {
       );
     }
 
+    setMapInstance(map);
+
     // Invalidate size with multiple delays to handle layout timing
-    setTimeout(() => mapRef.current?.invalidateSize(), 100);
-    setTimeout(() => mapRef.current?.invalidateSize(), 500);
+    setTimeout(() => map?.invalidateSize(), 100);
+    setTimeout(() => map?.invalidateSize(), 500);
 
     return () => {
-      mapRef.current?.remove();
-      mapRef.current = null;
+      map?.remove();
+      setMapInstance(null);
     };
   }, [loading]);
 
   // Issue markers
   useEffect(() => {
-    if (!mapRef.current) return;
+    if (!mapInstance) return;
 
     issueLayerRef.current?.remove();
     issueLayerRef.current = L.layerGroup();
@@ -390,19 +392,19 @@ export default function AdminWardsMap() {
       issueLayerRef.current.addLayer(marker);
     });
 
-    issueLayerRef.current.addTo(mapRef.current);
+    issueLayerRef.current.addTo(mapInstance);
 
     if (filteredIssues.length) {
       const bounds = L.latLngBounds(
         filteredIssues.map((issue) => [issue.latitude, issue.longitude]),
       );
-      mapRef.current.fitBounds(bounds.pad(0.2));
+      mapInstance.fitBounds(bounds.pad(0.2));
     }
-  }, [filteredIssues]);
+  }, [filteredIssues, mapInstance]);
 
   // Hotspot radial circles (matching app style)
   useEffect(() => {
-    if (!mapRef.current) return;
+    if (!mapInstance) return;
 
     hotspotLayerRef.current?.remove();
     hotspotLayerRef.current = L.layerGroup();
@@ -458,17 +460,17 @@ export default function AdminWardsMap() {
       }).addTo(hotspotLayerRef.current);
     });
 
-    hotspotLayerRef.current.addTo(mapRef.current);
-  }, [hotspotCenters]);
+    hotspotLayerRef.current.addTo(mapInstance);
+  }, [hotspotCenters, mapInstance]);
 
   // Ward polygons
   useEffect(() => {
-    if (!mapRef.current) return;
+    if (!mapInstance) return;
 
     wardLayerRef.current?.remove();
 
     if (!showWards) {
-      wardLayerRef.current = L.layerGroup().addTo(mapRef.current);
+      wardLayerRef.current = L.layerGroup().addTo(mapInstance);
       return;
     }
 
@@ -533,7 +535,7 @@ export default function AdminWardsMap() {
             }
           });
         },
-      }).addTo(mapRef.current);
+      }).addTo(mapInstance);
 
       return;
     }
@@ -603,8 +605,8 @@ export default function AdminWardsMap() {
       wardLayerRef.current.addLayer(geo);
     });
 
-    wardLayerRef.current.addTo(mapRef.current);
-  }, [wards, wardGeoJson, showWards]);
+    wardLayerRef.current.addTo(mapInstance);
+  }, [wards, wardGeoJson, showWards, mapInstance]);
 
   const criticalCount = useMemo(
     () => issues.filter((i) => i.criticality === "HIGH").length,

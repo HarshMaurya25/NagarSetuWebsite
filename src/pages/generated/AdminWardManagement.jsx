@@ -194,9 +194,9 @@ export default function AdminWardManagement() {
   const [supervisorModalLoading, setSupervisorModalLoading] = useState(false);
   const [deletingWard, setDeletingWard] = useState(false);
 
-  // ── Map refs
+  // ── Map state & refs
   const mapNodeRef = useRef(null);
-  const mapRef = useRef(null);
+  const [mapInstance, setMapInstance] = useState(null);
   const drawLayerRef = useRef(null);
   const drawControlRef = useRef(null);
   const wardOverlayRef = useRef(null);
@@ -219,7 +219,7 @@ export default function AdminWardManagement() {
       setWardBoundaryGeoJson(nextGeoJson);
       setSupervisors(workforce.supervisors || []);
 
-      if (mapRef.current && nextGeoJson) {
+      if (mapInstance && nextGeoJson) {
         const normalizedFocusId = normalizeWardId(focusWardId);
         let targetFeature = null;
         if (normalizedFocusId) {
@@ -229,10 +229,10 @@ export default function AdminWardManagement() {
         try {
           if (targetFeature) {
             const bounds = L.geoJSON(targetFeature).getBounds();
-            mapRef.current.fitBounds(bounds.pad(0.2));
+            mapInstance.fitBounds(bounds.pad(0.2));
           } else if (fitAll) {
             const bounds = L.geoJSON(nextGeoJson).getBounds();
-            mapRef.current.fitBounds(bounds.pad(0.2));
+            mapInstance.fitBounds(bounds.pad(0.2));
           }
         } catch {
           // ignore map fit errors
@@ -252,19 +252,19 @@ export default function AdminWardManagement() {
     if (!mapNodeRef.current || mapInitializedRef.current) return;
     mapInitializedRef.current = true;
 
-    mapRef.current = L.map(mapNodeRef.current).setView([28.6139, 77.209], 11);
+    const map = L.map(mapNodeRef.current).setView([28.6139, 77.209], 11);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: "© OpenStreetMap contributors", maxZoom: 19,
-    }).addTo(mapRef.current);
+    }).addTo(map);
 
-    drawLayerRef.current = new L.FeatureGroup().addTo(mapRef.current);
+    drawLayerRef.current = new L.FeatureGroup().addTo(map);
 
     drawControlRef.current = new L.Control.Draw({
       draw: { polygon: true, rectangle: true, circle: false, marker: false, polyline: false, circlemarker: false },
       edit: { featureGroup: drawLayerRef.current },
     });
 
-    mapRef.current.on(L.Draw.Event.CREATED, (e) => {
+    map.on(L.Draw.Event.CREATED, (e) => {
       drawLayerRef.current.clearLayers();
       drawLayerRef.current.addLayer(e.layer);
       setDrawnGeoJson(e.layer.toGeoJSON());
@@ -274,11 +274,11 @@ export default function AdminWardManagement() {
     if (navigator?.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          if (!mapRef.current || hasInitialCenterRef.current) return;
+          if (!map || hasInitialCenterRef.current) return;
           const { latitude: lat, longitude: lng } = pos.coords;
           if (typeof lat === "number" && typeof lng === "number") {
             hasInitialCenterRef.current = true;
-            mapRef.current.setView([lat, lng], 11);
+            map.setView([lat, lng], 11);
           }
         },
         () => {},
@@ -286,7 +286,8 @@ export default function AdminWardManagement() {
       );
     }
 
-    setTimeout(() => mapRef.current?.invalidateSize(), 100);
+    setMapInstance(map);
+    setTimeout(() => map?.invalidateSize(), 100);
   }, []);
 
   // Ref callback ensures map inits as soon as the DOM node exists
@@ -297,9 +298,9 @@ export default function AdminWardManagement() {
       requestAnimationFrame(() => {
         if (!mapInitializedRef.current) {
           initMap();
-        } else if (mapRef.current) {
+        } else if (mapInstance) {
           // Map already exists, just invalidate size
-          setTimeout(() => mapRef.current?.invalidateSize(), 50);
+          setTimeout(() => mapInstance?.invalidateSize(), 50);
         } else {
           // Map was somehow destroyed, re-init
           mapInitializedRef.current = false;
@@ -307,12 +308,12 @@ export default function AdminWardManagement() {
         }
       });
     }
-  }, [initMap]);
+  }, [initMap, mapInstance]);
 
   /* ── Draw control toggle ── */
   useEffect(() => {
-    if (!mapRef.current || !drawControlRef.current) return;
-    const map = mapRef.current;
+    if (!mapInstance || !drawControlRef.current) return;
+    const map = mapInstance;
     const dc = drawControlRef.current;
     if (view === "add") {
       try { map.addControl(dc); } catch { /* already added */ }
@@ -321,11 +322,11 @@ export default function AdminWardManagement() {
       setDrawnGeoJson(null);
       drawLayerRef.current?.clearLayers();
     }
-  }, [view]);
+  }, [view, mapInstance]);
 
   /* ── Ward overlay on map ── */
   useEffect(() => {
-    if (!mapRef.current) return;
+    if (!mapInstance) return;
     wardOverlayRef.current?.remove();
     wardOverlayRef.current = null;
 
@@ -350,10 +351,10 @@ export default function AdminWardManagement() {
             selectWard(String(eid), String(ename));
           });
         },
-      }).addTo(mapRef.current);
+      }).addTo(mapInstance);
 
       if (!hasInitialCenterRef.current) {
-        try { mapRef.current.fitBounds(wardOverlayRef.current.getBounds().pad(0.2)); } catch { /* ignore */ }
+        try { mapInstance.fitBounds(wardOverlayRef.current.getBounds().pad(0.2)); } catch { /* ignore */ }
       }
       return;
     }
@@ -372,23 +373,23 @@ export default function AdminWardManagement() {
       });
       group.addLayer(geo);
     });
-    group.addTo(mapRef.current);
+    group.addTo(mapInstance);
     wardOverlayRef.current = group;
     if (!hasInitialCenterRef.current) {
-      try { mapRef.current.fitBounds(group.getBounds().pad(0.2)); } catch { /* ignore */ }
+      try { mapInstance.fitBounds(group.getBounds().pad(0.2)); } catch { /* ignore */ }
     }
-  }, [wards, wardBoundaryGeoJson]);
+  }, [wards, wardBoundaryGeoJson, mapInstance]);
 
   /* ── Invalidate on view changes ── */
   useEffect(() => {
     if (view !== "detail") {
       setTimeout(() => {
-        if (mapRef.current) {
-          mapRef.current.invalidateSize();
+        if (mapInstance) {
+          mapInstance.invalidateSize();
         }
       }, 100);
     }
-  }, [view]);
+  }, [view, mapInstance]);
 
   /* ── Computed ── */
   const selectedWardMeta = useMemo(() => {
@@ -516,7 +517,7 @@ export default function AdminWardManagement() {
       setWardMatrix(null);
       setView("overview");
       await load({ fitAll: true });
-      setTimeout(() => mapRef.current?.invalidateSize(), 120);
+      setTimeout(() => mapInstance?.invalidateSize(), 120);
     } catch (err) {
       setMessage(err.message || "Failed to delete ward.");
     } finally {

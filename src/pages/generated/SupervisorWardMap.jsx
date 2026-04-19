@@ -97,7 +97,7 @@ function escapeHtml(value) {
 
 export default function SupervisorWardMap() {
   const user = getUser();
-  const mapRef = useRef(null);
+  const [mapInstance, setMapInstance] = useState(null);
   const layerRef = useRef(null);
   const wardLayerRef = useRef(null);
   const hotspotLayerRef = useRef(null);
@@ -330,23 +330,25 @@ export default function SupervisorWardMap() {
   }, [assignedWardFeature, matrix]);
 
   useEffect(() => {
-    if (!mapNodeRef.current || mapRef.current) return;
+    if (!mapNodeRef.current || mapInstance) return;
 
-    mapRef.current = L.map(mapNodeRef.current).setView([28.6139, 77.209], 14);
+    const map = L.map(mapNodeRef.current).setView([28.6139, 77.209], 14);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: "© OpenStreetMap contributors",
       maxZoom: 19,
-    }).addTo(mapRef.current);
+    }).addTo(map);
 
-    setTimeout(() => mapRef.current?.invalidateSize(), 100);
-    setTimeout(() => mapRef.current?.invalidateSize(), 500);
+    setMapInstance(map);
+
+    setTimeout(() => map?.invalidateSize(), 100);
+    setTimeout(() => map?.invalidateSize(), 500);
 
     // Initial center fallback to geolocation if no data yet
     if (navigator?.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          if (!mapRef.current || filteredIssues.length > 0) return;
-          mapRef.current.setView(
+          if (!map || filteredIssues.length > 0) return;
+          map.setView(
             [pos.coords.latitude, pos.coords.longitude],
             13,
           );
@@ -358,7 +360,7 @@ export default function SupervisorWardMap() {
   }, [loading]);
 
   useEffect(() => {
-    if (!mapRef.current) return;
+    if (!mapInstance) return;
 
     if (layerRef.current) {
       layerRef.current.remove();
@@ -413,7 +415,7 @@ export default function SupervisorWardMap() {
       layerRef.current.addLayer(marker);
     });
 
-    layerRef.current.addTo(mapRef.current);
+    layerRef.current.addTo(mapInstance);
 
     // Radial Hotspots
     hotspotLayerRef.current?.remove();
@@ -462,37 +464,37 @@ export default function SupervisorWardMap() {
         interactive: false,
       }).addTo(hotspotLayerRef.current);
     });
-    hotspotLayerRef.current.addTo(mapRef.current);
+    hotspotLayerRef.current.addTo(mapInstance);
 
     if (assignedWardFeature) {
       // Priority 1: Focus on the assigned ward polygon
       const geoLayer = L.geoJSON(assignedWardFeature);
       const bounds = geoLayer.getBounds();
-      mapRef.current.fitBounds(bounds.pad(0.1));
+      mapInstance.fitBounds(bounds.pad(0.1));
 
       // Also restrict panning to this ward area (+ buffer)
       const expandedBounds = bounds.pad(1.0);
       boundsRef.current = expandedBounds;
-      mapRef.current.setMaxBounds(expandedBounds);
-      mapRef.current.options.maxBoundsViscosity = 0.8;
+      mapInstance.setMaxBounds(expandedBounds);
+      mapInstance.options.maxBoundsViscosity = 0.8;
     } else if (filteredIssues.length) {
       // Priority 2: Focus on issue clusters if polygon not found
       const bounds = L.latLngBounds(
         filteredIssues.map((issue) => [issue.latitude, issue.longitude]),
       );
-      mapRef.current.fitBounds(bounds.pad(0.2));
+      mapInstance.fitBounds(bounds.pad(0.2));
 
       // Set pan boundary at 1.5x the issue area
       const expandedBounds = bounds.pad(1.5);
       boundsRef.current = expandedBounds;
-      mapRef.current.setMaxBounds(expandedBounds);
-      mapRef.current.options.maxBoundsViscosity = 0.8;
+      mapInstance.setMaxBounds(expandedBounds);
+      mapInstance.options.maxBoundsViscosity = 0.8;
     }
-  }, [filteredIssues, assignedWardFeature]);
+  }, [filteredIssues, assignedWardFeature, mapInstance]);
 
   // Draw colored ward polygon overlay
   useEffect(() => {
-    if (!mapRef.current) return;
+    if (!mapInstance) return;
     wardLayerRef.current?.remove();
     wardLayerRef.current = null;
 
@@ -505,7 +507,7 @@ export default function SupervisorWardMap() {
           fillColor: "#60a5fa",
           fillOpacity: 0.22,
         },
-      }).addTo(mapRef.current);
+      }).addTo(mapInstance);
 
       // Add ward name label
       const center = wardLayerRef.current.getBounds().getCenter();
@@ -519,7 +521,7 @@ export default function SupervisorWardMap() {
         wardLayerRef.current,
       );
     }
-  }, [assignedWardFeature, wardDisplayName]);
+  }, [assignedWardFeature, wardDisplayName, mapInstance]);
 
   const selectClass =
     "w-full appearance-none rounded-2xl bg-surface-container-lowest border border-outline-variant/20 px-4 py-3 pr-10 text-sm font-bold text-on-surface shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/25";

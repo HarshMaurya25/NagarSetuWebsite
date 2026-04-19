@@ -268,6 +268,8 @@ export async function getWorkerDetail(workerId) {
     `/api/supervisor/workers/${id}`,
     `/api/worker/${id}/detail`,
     `/api/worker/${id}`,
+    `/api/user/get?id=${id}`,
+    `/api/user/${id}`,
   ];
 
   for (const url of candidates) {

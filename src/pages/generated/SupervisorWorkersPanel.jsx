@@ -228,7 +228,7 @@ export default function SupervisorWorkersPanel() {
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div>
                   <h2 className="text-xl font-black text-primary">
-                    Worker Detail
+                    Assigned Tasks
                   </h2>
                   <p className="text-outline mt-1">{selectedWorker.fullName}</p>
                 </div>
@@ -250,37 +250,9 @@ export default function SupervisorWorkersPanel() {
               {detailError && <p className="text-error">{detailError}</p>}
 
               {!detailLoading && (
-                <>
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
-                    <div className="bg-surface-container-low rounded-lg p-3">
-                      <p className="text-xs text-outline uppercase">Name</p>
-                      <p className="font-semibold">
-                        {workerDetail?.fullName || selectedWorker.fullName}
-                      </p>
-                    </div>
-                    <div className="bg-surface-container-low rounded-lg p-3">
-                      <p className="text-xs text-outline uppercase">Email</p>
-                      <p className="font-semibold">
-                        {workerDetail?.email || selectedWorker?.email || "N/A"}
-                      </p>
-                    </div>
-                    <div className="bg-surface-container-low rounded-lg p-3">
-                      <p className="text-xs text-outline uppercase">Phone</p>
-                      <p className="font-semibold">
-                        {workerDetail?.phoneNumber || selectedWorker?.phoneNumber || "N/A"}
-                      </p>
-                    </div>
-                    <div className="bg-surface-container-low rounded-lg p-3">
-                      <p className="text-xs text-outline uppercase">Age</p>
-                      <p className="font-semibold">
-                        {workerDetail?.age || selectedWorker?.age || "N/A"}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div>
-                    <h3 className="font-bold mb-3">Assigned Issues</h3>
-                    <div className="space-y-2 max-h-80 overflow-auto">
+                <div>
+                  <h3 className="font-bold mb-3 text-primary">Assigned Issues</h3>
+                  <div className="space-y-2 max-h-80 overflow-auto">
                       {workerIssues.map((issue) => (
                         <div
                           key={issue.id}

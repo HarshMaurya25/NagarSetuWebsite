@@ -261,19 +261,19 @@ export default function SupervisorWorkersPanel() {
                     <div className="bg-surface-container-low rounded-lg p-3">
                       <p className="text-xs text-outline uppercase">Email</p>
                       <p className="font-semibold">
-                        {workerDetail?.email || "N/A"}
+                        {workerDetail?.email || selectedWorker?.email || "N/A"}
                       </p>
                     </div>
                     <div className="bg-surface-container-low rounded-lg p-3">
                       <p className="text-xs text-outline uppercase">Phone</p>
                       <p className="font-semibold">
-                        {workerDetail?.phoneNumber || "N/A"}
+                        {workerDetail?.phoneNumber || selectedWorker?.phoneNumber || "N/A"}
                       </p>
                     </div>
                     <div className="bg-surface-container-low rounded-lg p-3">
                       <p className="text-xs text-outline uppercase">Age</p>
                       <p className="font-semibold">
-                        {workerDetail?.age || "N/A"}
+                        {workerDetail?.age || selectedWorker?.age || "N/A"}
                       </p>
                     </div>
                   </div>

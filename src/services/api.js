@@ -263,13 +263,25 @@ export async function getWorkerDetail(workerId) {
 
   const candidates = [
     `/api/admin/users/workers/${id}/detail`,
+    `/api/supervisor/worker/${id}/detail`,
+    `/api/supervisor/workers/${id}/detail`,
+    `/api/supervisor/workers/${id}`,
     `/api/worker/${id}/detail`,
     `/api/worker/${id}`,
   ];
 
   for (const url of candidates) {
     try {
-      return await get(url);
+      const res = await get(url);
+      if (res) {
+        return {
+          ...res,
+          email: pickFirst(res, ["email", "emailAddress", "address"]),
+          phoneNumber: pickFirst(res, ["phoneNumber", "phone", "contact", "contactNumber", "mobile"]),
+          age: pickFirst(res, ["age", "workerAge", "userAge"]),
+          fullName: pickFirst(res, ["fullName", "name", "username", "workerName"]),
+        };
+      }
     } catch {
       // try next candidate
     }
@@ -591,6 +603,9 @@ function normalizeSupervisorWorker(worker = {}) {
     id,
     fullName,
     issueCount,
+    email: pickFirst(worker, ["email", "emailAddress", "address"]),
+    phoneNumber: pickFirst(worker, ["phoneNumber", "phone", "contact", "contactNumber", "mobile"]),
+    age: pickFirst(worker, ["age", "workerAge", "userAge"]),
   };
 }
 
@@ -682,6 +697,8 @@ export async function getWorkerAssignedIssues(workerId) {
 
   const candidates = [
     `/api/admin/worker/${id}/issues`,
+    `/api/supervisor/worker/${id}/issues`,
+    `/api/supervisor/workers/${id}/issues`,
     `/api/worker/${id}/issues`,
     `/api/worker/issues?workerId=${id}`,
   ];
@@ -689,7 +706,8 @@ export async function getWorkerAssignedIssues(workerId) {
   for (const url of candidates) {
     try {
       const res = await get(url);
-      return normalize(res);
+      const issues = normalize(res);
+      if (issues.length > 0) return issues;
     } catch {
       // try next candidate
     }

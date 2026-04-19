@@ -963,12 +963,18 @@ export async function completeIssue(issueId) {
 }
 
 // ML Prediction Dashboard Endpoints (Flask Port 5000)
-export function trainMlModel(token) {
-  // Pass the token explicitly if needed, although http.js handles it if getToken() works
+export function trainMlModel(token, adminName = "Admin", useLocal = false) {
   return request("/api/login", {
     method: "POST",
     baseUrl: ML_API_BASE,
-    body: JSON.stringify({ token }),
+    body: JSON.stringify({ token, adminName, useLocal }),
+  });
+}
+
+export function trainSynthetic() {
+  return request("/api/train-synthetic", {
+    method: "POST",
+    baseUrl: ML_API_BASE,
   });
 }
 
@@ -989,6 +995,20 @@ export function getMlHistorical() {
 export function getMlStats() {
   return request("/api/stats", {
     method: "GET",
+    baseUrl: ML_API_BASE,
+  });
+}
+
+export function getMlStatus() {
+  return request("/api/ml/status", {
+    method: "GET",
+    baseUrl: ML_API_BASE,
+  });
+}
+
+export function trainAllMlModels() {
+  return request("/api/ml/train/all", {
+    method: "POST",
     baseUrl: ML_API_BASE,
   });
 }

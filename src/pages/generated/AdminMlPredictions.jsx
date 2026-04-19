@@ -1,27 +1,32 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   trainMlModel, 
+  trainSynthetic, 
   getMlForecast, 
   getMlHistorical, 
-  getMlStats 
+  getMlStats, 
+  getMlStatus, 
+  trainAllMlModels 
 } from '../../services/api';
-import { getToken } from '../../lib/session';
+import { getToken, getUser } from '../../lib/session';
 import { 
   Chart, 
   CategoryScale, 
   LinearScale, 
   PointElement, 
   LineElement, 
+  BarElement, 
   Title, 
   Tooltip, 
   Legend, 
   Filler, 
   LineController,
-  ArcElement,
-  DoughnutController,
   BarController,
-  BarElement
+  ArcElement,
+  DoughnutController
 } from 'chart.js';
+import annotationPlugin from 'chartjs-plugin-annotation';
+import './AdminMlPredictions.css';
 
 // Register Chart.js components
 Chart.register(
@@ -29,457 +34,557 @@ Chart.register(
   LinearScale, 
   PointElement, 
   LineElement, 
+  BarElement,
   Title, 
   Tooltip, 
   Legend, 
   Filler, 
   LineController,
+  BarController,
   ArcElement,
   DoughnutController,
-  BarController,
-  BarElement
+  annotationPlugin
 );
 
-const CATEGORY_COLORS = {
-  ROAD: '#3b82f6',        // Blue
-  WATER: '#0ea5e9',       // Sky
-  GARBAGE: '#10b981',     // Emerald
-  VEHICLE: '#f59e0b',     // Amber
-  STREETLIGHT: '#6366f1', // Indigo
-  OTHER: '#94a3b8'        // Slate
+const THEME_COLORS = {
+  primary: "#1a365d",
+  secondary: "#2563eb",
+  tertiary: "#18355a",
+  outline: "#757684",
+  grid: "rgba(0, 40, 142, 0.05)",
+};
+
+const TYPE_COLORS = {
+  ROAD: { bg: "rgba(239, 68, 68, 0.7)", border: "#ef4444" },
+  WATER: { bg: "rgba(59, 130, 246, 0.7)", border: "#3b82f6" },
+  GARBAGE: { bg: "rgba(16, 185, 129, 0.7)", border: "#10b981" },
+  VEHICLE: { bg: "rgba(245, 158, 11, 0.7)", border: "#f59e0b" },
+  STREETLIGHT: { bg: "rgba(168, 85, 247, 0.7)", border: "#a855f7" },
+  OTHER: { bg: "rgba(100, 116, 139, 0.7)", border: "#64748b" },
 };
 
 export default function AdminMlPredictions() {
-  const [loading, setLoading] = useState(true);
-  const [isTraining, setIsTraining] = useState(false);
+  const [isReady, setIsReady] = useState(false);
+  const [syncing, setSyncing] = useState(true);
   const [error, setError] = useState(null);
-  const [stats, setStats] = useState(null);
+  
+  // Data States
+  const [loginData, setLoginData] = useState(null);
+  const [stats, setStats] = useState({});
   const [historical, setHistorical] = useState(null);
   const [forecast, setForecast] = useState(null);
-  
-  const mainChartRef = useRef(null);
-  const typeChartRef = useRef(null);
-  const histDistributionRef = useRef(null);
-  const forecastDistributionRef = useRef(null);
-  
-  const mainChartInstance = useRef(null);
-  const typeChartInstance = useRef(null);
-  const histDistInstance = useRef(null);
-  const forecastDistInstance = useRef(null);
+  const [mlStatus, setMlStatus] = useState({});
+  const [isTrainingAll, setIsTrainingAll] = useState(false);
 
+  // Chart Refs
+  const chartRefs = {
+    forecast: useRef(null),
+    type: useRef(null),
+    typeForecast: useRef(null),
+    dow: useRef(null),
+    cumulative: useRef(null),
+  };
+  const instances = useRef({});
+
+  // 1. Auto-Login / Sync on Mount
   useEffect(() => {
-    initM18();
+    autoSync();
+    return () => {
+      Object.keys(instances.current).forEach(destroyChart);
+    };
   }, []);
 
-  useEffect(() => {
-    if (historical && forecast) {
-      if (mainChartRef.current) renderMainChart();
-      if (typeChartRef.current) renderTypeTrendChart();
-      if (histDistributionRef.current) renderDistributionChart(histDistributionRef, histDistInstance, historical.by_type, 'Past 30 Days');
-      if (forecastDistributionRef.current) renderDistributionChart(forecastDistributionRef, forecastDistInstance, forecast.type_forecasts, 'Next 30 Days');
-    }
-  }, [historical, forecast]);
-
-  const initM18 = async () => {
-    setLoading(true);
-    setIsTraining(true);
+  const autoSync = async () => {
+    setSyncing(true);
     setError(null);
-
     try {
       const token = getToken();
-      if (!token) throw new Error("No admin token found. Please login.");
-
-      // Step 1: Login/Train
-      console.log("Starting M18 Model Training...");
-      await trainMlModel(token);
+      if (!token) {
+        throw new Error("No active session found. Please login to the portal first.");
+      }
       
-      // Step 2: Fetch Data
-      const [statsData, histData, forecastData] = await Promise.all([
-        getMlStats(),
+      const user = getUser();
+      const adminName = user?.fullName || "Admin";
+
+      // Authenticate with ML service using existing token
+      const data = await trainMlModel(token, adminName, false);
+      
+      // Load Dashboard Data
+      const [forecastRes, historicalRes, statsRes, statusRes] = await Promise.all([
+        getMlForecast(),
         getMlHistorical(),
-        getMlForecast()
+        getMlStats(),
+        getMlStatus().catch(() => ({ results: {} }))
       ]);
 
-      setStats(statsData);
-      setHistorical(histData);
-      setForecast(forecastData);
-      setIsTraining(false);
+      setLoginData(data);
+      setHistorical(historicalRes);
+      setForecast(forecastRes);
+      setStats(statsRes);
+      setMlStatus(statusRes.results || {});
+      setIsReady(true);
     } catch (err) {
-      console.error("ML Integration Error:", err);
-      setError(err.message || "Failed to initialize ML backend");
+      console.error("AutoSync Error:", err);
+      setError(err.message || "Failed to sync with ML service.");
     } finally {
-      setLoading(false);
-      setIsTraining(false);
+      setSyncing(false);
     }
   };
 
-  const renderMainChart = () => {
-    if (mainChartInstance.current) mainChartInstance.current.destroy();
-    const ctx = mainChartRef.current.getContext('2d');
-    const labels = [...historical.dates, ...forecast.dates];
-    
-    mainChartInstance.current = new Chart(ctx, {
-      type: 'line',
+  const destroyChart = (id) => {
+    if (instances.current[id]) {
+      instances.current[id].destroy();
+      delete instances.current[id];
+    }
+  };
+
+  const trainAllModels = async () => {
+    setIsTrainingAll(true);
+    try {
+      const data = await trainAllMlModels();
+      setMlStatus(data.results || {});
+    } catch (err) {
+      setError("Training failed: " + err.message);
+    } finally {
+      setIsTrainingAll(false);
+    }
+  };
+
+  // 2. Chart Rendering Effect
+  useEffect(() => {
+    if (isReady && historical && forecast) {
+      renderForecastChart();
+      renderTypeBreakdown();
+      renderTypeForecast();
+      renderDOWChart();
+      renderCumulativeChart();
+    }
+  }, [isReady, historical, forecast]);
+
+  /* ═══════════ CHART RENDERERS ═══════════ */
+
+  const renderForecastChart = () => {
+    destroyChart("forecast");
+    const hist = historical;
+    const fore = forecast;
+
+    let hDates = hist.dates, hCounts = hist.counts, hTrend = hist.trend;
+    const MAX_HIST = 90;
+    if (hDates.length > MAX_HIST) {
+      const start = hDates.length - MAX_HIST;
+      hDates = hDates.slice(start);
+      hCounts = hCounts.slice(start);
+      hTrend = hTrend.slice(start);
+    }
+
+    const allDates = [...hDates, ...fore.dates];
+    const allLabels = allDates.map(d => new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short" }));
+
+    const ctx = chartRefs.forecast.current.getContext("2d");
+    instances.current.forecast = new Chart(ctx, {
+      type: "line",
       data: {
-        labels: labels,
+        labels: allLabels,
         datasets: [
           {
-            label: 'Actual Volume',
-            data: [...historical.counts, ...new Array(forecast.dates.length).fill(null)],
-            borderColor: '#00288e',
-            backgroundColor: 'rgba(0, 40, 142, 0.1)',
+            label: "Actual Volume",
+            data: [...hCounts, ...Array(fore.dates.length).fill(null)],
+            borderColor: THEME_COLORS.primary,
+            backgroundColor: "rgba(26, 54, 93, 0.05)",
+            borderWidth: 2,
+            pointRadius: 1,
             fill: true,
-            tension: 0.4,
-            pointRadius: 2,
-            spanGaps: true,
+            tension: 0.3,
+            order: 2,
           },
           {
-            label: 'AI Forecast',
-            data: [...new Array(historical.dates.length - 1).fill(null), historical.counts[historical.counts.length - 1], ...forecast.predicted],
-            borderColor: '#4f46e5',
-            borderDash: [8, 4],
-            backgroundColor: 'rgba(79, 70, 229, 0.05)',
-            fill: true,
-            tension: 0.4,
-            pointRadius: 3,
-            spanGaps: true,
-          },
-          {
-            label: '95% Confidence Upper',
-            data: [...new Array(historical.dates.length - 1).fill(null), historical.counts[historical.counts.length - 1], ...forecast.upper_bound],
-            borderColor: 'transparent',
-            pointRadius: 0,
-            fill: '+1',
-            backgroundColor: 'rgba(79, 70, 229, 0.1)',
-            spanGaps: true,
-          },
-          {
-            label: '95% Confidence Lower',
-            data: [...new Array(historical.dates.length - 1).fill(null), historical.counts[historical.counts.length - 1], ...forecast.lower_bound],
-            borderColor: 'transparent',
+            label: "Predictive Trend",
+            data: [...hTrend, ...Array(fore.dates.length).fill(null)],
+            borderColor: "#6366f1",
+            borderWidth: 1.5,
+            borderDash: [5, 5],
             pointRadius: 0,
             fill: false,
-            spanGaps: true,
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { 
-          legend: { display: false }, 
-          tooltip: { mode: 'index', intersect: false } 
-        },
-        scales: {
-          x: { grid: { display: false }, ticks: { maxTicksLimit: 12, font: { size: 10, weight: 'bold' } } },
-          y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } }
-        }
-      }
-    });
-  };
-
-  const renderTypeTrendChart = () => {
-    if (typeChartInstance.current) typeChartInstance.current.destroy();
-    const ctx = typeChartRef.current.getContext('2d');
-    const labels = [...historical.dates, ...forecast.dates];
-    
-    const datasets = Object.keys(historical.by_type).map(type => {
-      const histData = historical.by_type[type] || [];
-      const foreData = forecast.type_forecasts[type] || [];
-      
-      // Combine: hist + fill gaps + forecast
-      // We need to overlap exactly like the main chart for continuity
-      const combinedData = [
-        ...histData, 
-        ...new Array(foreData.length).fill(null)
-      ];
-      
-      const combinedFore = [
-        ...new Array(histData.length - 1).fill(null),
-        histData[histData.length - 1],
-        ...foreData
-      ];
-
-      return [
-        {
-          label: `${type} (Actual)`,
-          data: combinedData,
-          borderColor: CATEGORY_COLORS[type] || '#94a3b8',
-          tension: 0.4,
-          pointRadius: 0,
-          borderWidth: 2,
-          fill: false,
-          spanGaps: true
-        },
-        {
-          label: `${type} (AI)`,
-          data: combinedFore,
-          borderColor: CATEGORY_COLORS[type] || '#94a3b8',
-          borderDash: [5, 3],
-          tension: 0.4,
-          pointRadius: 0,
-          borderWidth: 2,
-          fill: false,
-          spanGaps: true
-        }
-      ];
-    }).flat();
-
-    typeChartInstance.current = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: labels,
-        datasets: datasets
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { 
-          legend: { 
-            display: false // Too many labels now, we'll rely on the color system
+            tension: 0.4,
+            order: 3,
           },
-          tooltip: { mode: 'index', intersect: false }
+          {
+            label: "Volume Forecast",
+            data: [...Array(hDates.length).fill(null), ...fore.predicted],
+            borderColor: "#10b981",
+            backgroundColor: "rgba(16, 185, 129, 0.05)",
+            borderWidth: 2.5,
+            pointRadius: 3,
+            fill: false,
+            tension: 0.3,
+            order: 1,
+          },
+          {
+            label: "95% Confidence Interval",
+            data: [...Array(hDates.length).fill(null), ...fore.upper_bound],
+            borderColor: "rgba(16, 185, 129, 0.2)",
+            backgroundColor: "rgba(16, 185, 129, 0.05)",
+            borderWidth: 1,
+            pointRadius: 0,
+            fill: "+1",
+            tension: 0.3,
+            order: 4,
+          },
+          {
+            label: "Forecast Lower Bound",
+            data: [...Array(hDates.length).fill(null), ...fore.lower_bound],
+            borderColor: "rgba(16, 185, 129, 0.2)",
+            borderWidth: 1,
+            pointRadius: 0,
+            fill: false,
+            tension: 0.3,
+            order: 5,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { labels: { color: THEME_COLORS.outline, font: { weight: '800', size: 11 }, usePointStyle: true } },
+          tooltip: { backgroundColor: "rgba(255, 255, 255, 0.98)", titleColor: THEME_COLORS.primary, bodyColor: THEME_COLORS.onSurfaceVariant, borderColor: "#e2e8f0", borderWidth: 1, padding: 12, cornerRadius: 10 },
         },
         scales: {
-          x: { grid: { display: false }, ticks: { maxTicksLimit: 10 } },
-          y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.03)' } }
-        }
-      }
+          x: { grid: { color: THEME_COLORS.grid }, ticks: { color: THEME_COLORS.outline, font: { weight: '600', size: 10 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 12 } },
+          y: { grid: { color: THEME_COLORS.grid }, ticks: { color: THEME_COLORS.outline, font: { weight: '600', size: 10 } } },
+        },
+      },
     });
   };
 
-  const renderDistributionChart = (ref, instanceRef, dataMap, label) => {
-    if (instanceRef.current) instanceRef.current.destroy();
-    const ctx = ref.current.getContext('2d');
-    
-    const types = Object.keys(dataMap);
-    const totals = types.map(type => 
-      Array.isArray(dataMap[type]) ? dataMap[type].reduce((a, b) => a + (b || 0), 0) : 0
-    );
+  const renderTypeBreakdown = () => {
+    destroyChart("type");
+    const types = Object.keys(historical?.by_type || {});
+    if (!types.length) return;
 
-    instanceRef.current = new Chart(ctx, {
-      type: 'doughnut',
+    let dates = historical.dates;
+    const byType = historical.by_type;
+    const MAX = 90;
+    let startIdx = 0;
+    if (dates.length > MAX) {
+      startIdx = dates.length - MAX;
+      dates = dates.slice(startIdx);
+    }
+
+    const datasets = types.map((t) => ({
+      label: t,
+      data: startIdx > 0 ? byType[t].slice(startIdx) : byType[t],
+      backgroundColor: TYPE_COLORS[t]?.bg || "rgba(100,116,139,0.5)",
+      borderColor: TYPE_COLORS[t]?.border || "#64748b",
+      borderWidth: 1.5,
+      fill: true,
+      tension: 0.4,
+      pointRadius: 0,
+    }));
+
+    const labels = dates.map(d => new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short" }));
+    const ctx = chartRefs.type.current.getContext("2d");
+    instances.current.type = new Chart(ctx, {
+      type: "line",
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { color: THEME_COLORS.outline, font: { weight: '800', size: 10 }, padding: 20, usePointStyle: true } },
+          tooltip: { backgroundColor: "rgba(255, 255, 255, 0.98)", titleColor: THEME_COLORS.primary, bodyColor: THEME_COLORS.outline, borderColor: "#e2e8f0", borderWidth: 1 },
+        },
+        scales: {
+          x: { stacked: true, grid: { display: false }, ticks: { color: THEME_COLORS.outline, size: 9, autoSkip: true, maxTicksLimit: 12 } },
+          y: { stacked: true, grid: { color: THEME_COLORS.grid }, ticks: { color: THEME_COLORS.outline, size: 10 } },
+        },
+      },
+    });
+  };
+
+  const renderTypeForecast = () => {
+    destroyChart("typeForecast");
+    const tf = forecast?.type_forecasts || {};
+    const types = Object.keys(tf);
+    if (!types.length) return;
+
+    const totals = types.map(t => tf[t].reduce((a, b) => a + b, 0));
+    const ctx = chartRefs.typeForecast.current.getContext("2d");
+    instances.current.typeForecast = new Chart(ctx, {
+      type: "bar",
       data: {
         labels: types,
         datasets: [{
-          data: totals,
-          backgroundColor: types.map(t => CATEGORY_COLORS[t] || '#94a3b8'),
-          hoverOffset: 10,
-          borderWidth: 0
-        }]
+          label: "Predicted 30-Day Volume",
+          data: totals.map(v => Math.round(v)),
+          backgroundColor: types.map(t => TYPE_COLORS[t]?.border),
+          borderRadius: 8,
+          barPercentage: 0.6,
+        }],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        cutout: '75%',
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: {
-              label: function(item) {
-                const total = item.dataset.data.reduce((a, b) => a + b, 0);
-                const percent = total > 0 ? ((item.raw / total) * 100).toFixed(1) : 0;
-                return `${item.label}: ${item.raw.toFixed(0)} issues (${percent}%)`;
-              }
-            }
-          }
-        }
-      }
+        indexAxis: "y",
+        plugins: { legend: { display: false }, tooltip: { backgroundColor: "rgba(255, 255, 255, 0.98)", titleColor: THEME_COLORS.primary, bodyColor: THEME_COLORS.outline, borderColor: "#e2e8f0", borderWidth: 1 } },
+        scales: {
+          x: { grid: { color: THEME_COLORS.grid }, ticks: { color: THEME_COLORS.outline, size: 10 } },
+          y: { grid: { display: false }, ticks: { color: THEME_COLORS.primary, font: { weight: "800", size: 11 } } },
+        },
+      },
     });
   };
 
-  if (loading && !isTraining) {
+  const renderDOWChart = () => {
+    destroyChart("dow");
+    const dows = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const dowTotals = new Array(7).fill(0);
+    const dowCounts = new Array(7).fill(0);
+
+    historical.dates.forEach((d, i) => {
+      const dow = new Date(d).getDay();
+      dowTotals[dow] += historical.counts[i];
+      dowCounts[dow] += 1;
+    });
+
+    const avgs = dowTotals.map((t, i) => dowCounts[i] ? Math.round((t / dowCounts[i]) * 10) / 10 : 0);
+    const ctx = chartRefs.dow.current.getContext("2d");
+    instances.current.dow = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: dows,
+        datasets: [{ data: avgs, backgroundColor: THEME_COLORS.primary, borderRadius: 8, barPercentage: 0.5 }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { backgroundColor: "rgba(255, 255, 255, 0.98)", titleColor: THEME_COLORS.primary, bodyColor: THEME_COLORS.outline, borderColor: "#e2e8f0", borderWidth: 1 } },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: THEME_COLORS.primary, font: { weight: "800", size: 11 } } },
+          y: { grid: { color: THEME_COLORS.grid }, ticks: { color: THEME_COLORS.outline, size: 10 } },
+        },
+      },
+    });
+  };
+
+  const renderCumulativeChart = () => {
+    destroyChart("cumulative");
+    let cumulative = [];
+    let sum = 0;
+    historical.counts.forEach(c => { sum += c; cumulative.push(sum); });
+
+    let dates = historical.dates;
+    const MAX = 90;
+    if (dates.length > MAX) {
+      const s = dates.length - MAX;
+      dates = dates.slice(s);
+      cumulative = cumulative.slice(s);
+    }
+
+    const labels = dates.map(d => new Date(d).toLocaleDateString("en-IN", { day: "numeric", month: "short" }));
+    const ctx = chartRefs.cumulative.current.getContext("2d");
+    instances.current.cumulative = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          label: "Historical Accumulation",
+          data: cumulative,
+          borderColor: THEME_COLORS.primary,
+          backgroundColor: "rgba(26, 54, 93, 0.05)",
+          borderWidth: 2,
+          fill: true,
+          tension: 0.4,
+          pointRadius: 0,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { backgroundColor: "rgba(255, 255, 255, 0.98)", titleColor: THEME_COLORS.primary, bodyColor: THEME_COLORS.outline, borderColor: "#e2e8f0", borderWidth: 1 } },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: THEME_COLORS.outline, size: 9, autoSkip: true, maxTicksLimit: 12 } },
+          y: { grid: { color: THEME_COLORS.grid }, ticks: { color: THEME_COLORS.outline, size: 10 } },
+        },
+      },
+    });
+  };
+
+  if (syncing) {
     return (
-      <div className="flex h-screen items-center justify-center bg-surface-container-lowest">
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-on-surface-variant font-medium text-lg animate-pulse">Initializing Neural Streams...</p>
+      <div className="ml-dashboard-wrapper">
+        <div className="syncing-wrapper-ml">
+          <div className="syncing-card-ml">
+            <div className="ml-spinner mb-6"><span></span><span></span><span></span></div>
+            <h2>Syncing Predictions</h2>
+            <p>Connecting to NagarSetu Intelligence Service (M18)...</p>
+          </div>
         </div>
       </div>
     );
   }
 
-  return (
-    <>
-      <div className="pt-24 px-8 pb-12 w-full max-w-7xl mx-auto flex flex-col gap-8 relative">
-        
-        {/* Training Overlay */}
-        {isTraining && (
-          <div className="fixed inset-0 z-[100] bg-white/60 backdrop-blur-xl flex items-center justify-center">
-             <div className="bg-white p-10 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.1)] border border-outline/10 flex flex-col items-center gap-8 max-w-md text-center">
-                <div className="relative">
-                  <div className="w-24 h-24 border-4 border-primary/10 rounded-full"></div>
-                  <div className="absolute top-0 left-0 w-24 h-24 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
-                  <span className="material-symbols-outlined absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-4xl text-primary" data-icon="neurology">neurology</span>
-                </div>
-                <div>
-                  <h3 className="text-2xl font-black text-on-surface tracking-tight">Recalibrating M18 Engine</h3>
-                  <p className="text-on-surface-variant mt-3 leading-relaxed">Synthesizing {historical?.dates?.length} days of history with 30-day anticipatory models...</p>
-                </div>
-                <div className="w-full bg-surface-container-high h-2 rounded-full overflow-hidden">
-                  <div className="h-full bg-primary animate-[shimmer_2s_infinite] w-full bg-gradient-to-r from-primary via-blue-400 to-primary bg-[length:200%_100%]"></div>
-                </div>
-             </div>
+  if (error) {
+    return (
+      <div className="ml-dashboard-wrapper">
+        <div className="syncing-wrapper-ml">
+          <div className="syncing-card-ml border-t-4 border-error">
+            <h2 className="text-error">Sync Failed</h2>
+            <p className="mb-8">{error}</p>
+            <button onClick={autoSync} className="btn-ml-primary">Retry Sync</button>
           </div>
-        )}
-
-        {error && (
-          <div className="bg-error-container/20 text-on-error-container p-5 rounded-2xl flex items-center gap-4 border border-error/10 backdrop-blur-md">
-            <div className="w-10 h-10 rounded-full bg-error/10 flex items-center justify-center flex-shrink-0">
-              <span className="material-symbols-outlined text-error" data-icon="warning">warning</span>
-            </div>
-            <div className="flex-1">
-              <p className="font-bold">Neural Link Refused</p>
-              <p className="text-xs opacity-70 mt-0.5">{error}</p>
-            </div>
-            <button onClick={initM18} className="bg-primary text-white px-5 py-2 rounded-xl text-xs font-black uppercase tracking-widest hover:scale-105 active:scale-95 transition-all shadow-lg shadow-primary/20">Sync Again</button>
-          </div>
-        )}
-
-        {/*  Page Header  */}
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
-          <div className="max-w-2xl">
-            <span className="text-primary font-black tracking-[0.2em] text-xs uppercase mb-3 block">Unified Predictive Intelligence</span>
-            <h2 className="text-5xl font-black font-headline text-on-primary-fixed leading-none tracking-tighter">Civic Load <span className="text-primary">Timeline.</span></h2>
-            <p className="text-on-surface-variant mt-6 text-xl leading-relaxed opacity-80 font-medium">Unifying {historical?.total_issues || '---'} historical records with 30-day M18 projections.</p>
-          </div>
-          <div className="flex items-center gap-6 bg-white p-5 rounded-2xl shadow-xl border border-outline/5">
-            <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center shadow-inner">
-              <span className="material-symbols-outlined text-primary text-3xl" data-icon="data_exploration">data_exploration</span>
-            </div>
-            <div>
-              <p className="text-[10px] uppercase font-black tracking-widest text-on-surface-variant mb-1">Model R² Confidence</p>
-              <p className="text-3xl font-black text-primary leading-tight">{stats ? (stats.r2_score * 100).toFixed(1) : '--'}%</p>
-            </div>
-          </div>
-        </div>
-
-        {/*  Metric Cards  */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {[
-            { label: 'Total Volume', value: stats?.total_issues, sub: `${stats?.total_days} days`, icon: 'database', color: 'primary' },
-            { label: 'Avg Daily', value: stats?.avg_daily, sub: `Median: ${stats?.median_daily}`, icon: 'speed', color: 'secondary' },
-            { label: 'Trend Slopes', value: stats?.trend_direction?.split(' ')[1], sub: 'Regressive Trend', icon: 'trending_up', color: 'tertiary' },
-            { label: 'Std Error', value: `±${forecast?.residual_std}`, sub: 'RMSE Score', icon: 'psychology', color: 'error' }
-          ].map((card, i) => (
-            <div key={i} className="bg-white rounded-2xl p-6 shadow-sm flex flex-col border border-outline/5 relative overflow-hidden group hover:shadow-xl transition-all duration-500">
-              <div className={`absolute -right-6 -bottom-6 w-24 h-24 bg-${card.color}/5 rounded-full blur-2xl group-hover:scale-150 transition-transform duration-700`}></div>
-              <div className="flex justify-between items-start mb-6 relative z-10">
-                <div className={`p-3 bg-${card.color}/10 rounded-xl`}>
-                  <span className={`material-symbols-outlined text-${card.color}`} data-icon={card.icon}>{card.icon}</span>
-                </div>
-                <span className="text-[10px] font-black uppercase tracking-widest text-on-surface-variant/40">M18</span>
-              </div>
-              <h3 className="text-on-surface-variant text-[10px] font-black uppercase tracking-widest mb-1">{card.label}</h3>
-              <p className="text-3xl font-black text-on-surface leading-tight">{card.value || '0'}</p>
-              <p className="text-[10px] text-on-surface-variant mt-2 font-bold italic opacity-60">{card.sub}</p>
-            </div>
-          ))}
-        </div>
-
-        {/*  Main Volume Chart  */}
-        <div className="bg-white rounded-3xl p-8 shadow-xl relative overflow-hidden border border-outline/5">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-10">
-            <div>
-              <h3 className="text-2xl font-black font-headline tracking-tight">System-Wide Volume Pipeline</h3>
-              <p className="text-sm text-on-surface-variant font-medium mt-1">Seamless transition from historical actuals to AI-predicted volume.</p>
-            </div>
-          </div>
-          <div className="h-[400px] w-full relative">
-            <canvas ref={mainChartRef}></canvas>
-          </div>
-        </div>
-
-        {/*  Categorical Momentum Chart  */}
-        <div className="bg-white rounded-3xl p-8 shadow-xl border border-outline/5 flex flex-col">
-          <div className="mb-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-            <div>
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary">
-                  <span className="material-symbols-outlined text-lg" data-icon="stacked_line_chart">stacked_line_chart</span>
-                </div>
-                <h3 className="text-xl font-black font-headline">Unifed Categorical Momentum</h3>
-              </div>
-              <p className="text-sm text-on-surface-variant font-medium ml-11">Continuous history-to-forecast streams for each municipal category.</p>
-            </div>
-            <div className="flex flex-wrap gap-4 ml-11 md:ml-0">
-               {Object.entries(CATEGORY_COLORS).map(([type, color]) => (
-                 <div key={type} className="flex items-center gap-2">
-                   <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }}></span>
-                   <span className="text-[10px] font-black uppercase text-on-surface-variant">{type}</span>
-                 </div>
-               ))}
-            </div>
-          </div>
-          <div className="h-[350px] w-full">
-            <canvas ref={typeChartRef}></canvas>
-          </div>
-        </div>
-
-        {/* Comparison Section */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <div className="bg-white rounded-3xl p-8 shadow-xl border border-outline/5">
-                <h4 className="text-xl font-black font-headline mb-2 flex items-center gap-2">
-                   <span className="material-symbols-outlined text-indigo-500" data-icon="history">history</span>
-                   Past Load Share
-                </h4>
-                <p className="text-sm text-on-surface-variant font-medium mb-8">Asset distribution over the previous 30 days.</p>
-                <div className="h-[250px] w-full">
-                    <canvas ref={histDistributionRef}></canvas>
-                </div>
-            </div>
-            <div className="bg-white rounded-3xl p-8 shadow-xl border border-outline/5">
-                <h4 className="text-xl font-black font-headline mb-2 flex items-center gap-2">
-                   <span className="material-symbols-outlined text-primary" data-icon="rocket_launch">rocket_launch</span>
-                   Projected Load Share
-                </h4>
-                <p className="text-sm text-on-surface-variant font-medium mb-8">Anticipated asset distribution for the next 30 days.</p>
-                <div className="h-[250px] w-full">
-                    <canvas ref={forecastDistributionRef}></canvas>
-                </div>
-            </div>
-        </div>
-
-        {/*  Footer Content  */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-2 bg-primary p-10 rounded-3xl text-white flex flex-col md:flex-row items-center gap-10 relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-80 h-80 bg-white/5 rounded-full -translate-y-1/2 translate-x-1/2 blur-3xl"></div>
-                <div className="relative z-10 flex-1">
-                    <h4 className="text-3xl font-black font-headline mb-4">Adaptive Resource Provisioning</h4>
-                    <p className="opacity-90 text-lg leading-relaxed max-w-xl font-medium">By unifying historical entropy with predictive load, NagarSetu can now pre-emptively scale ward-level staffing 72 hours before a major categorical spike.</p>
-                    <div className="mt-8 flex gap-4">
-                        <button className="bg-white text-primary px-8 py-4 rounded-xl font-black uppercase tracking-widest text-xs hover:scale-105 transition-all shadow-xl">Activate Smart Dispatch</button>
-                    </div>
-                </div>
-            </div>
-
-            <div className="bg-surface-container-high p-10 rounded-3xl flex flex-col justify-between border border-outline/5 hover:bg-white transition-all duration-300 group shadow-sm hover:shadow-2xl">
-                <div>
-                   <h4 className="text-2xl font-black mb-4 tracking-tight">Forecast Health</h4>
-                   <div className="space-y-4">
-                      <div className="flex justify-between items-center">
-                         <span className="text-xs font-bold text-on-surface-variant">Model Confidence</span>
-                         <span className="text-xs font-black text-primary">{(stats?.r2_score * 100).toFixed(1)}%</span>
-                      </div>
-                      <div className="w-full bg-surface-container-highest h-1 rounded-full overflow-hidden">
-                        <div className="h-full bg-primary" style={{ width: `${stats?.r2_score * 100}%` }}></div>
-                      </div>
-                      <div className="flex justify-between items-center">
-                         <span className="text-xs font-bold text-on-surface-variant">RMSE Accuracy</span>
-                         <span className="text-xs font-black text-blue-500">High</span>
-                      </div>
-                   </div>
-                </div>
-                <button 
-                    onClick={initM18}
-                    className="w-full bg-on-surface text-white py-4 rounded-xl font-black uppercase tracking-widest text-xs flex items-center justify-center gap-3 hover:gap-5 transition-all"
-                >
-                    Re-Train Model
-                    <span className="material-symbols-outlined text-sm" data-icon="refresh">refresh</span>
-                </button>
-            </div>
         </div>
       </div>
-    </>
+    );
+  }
+
+  const makeStatus = (model) => (model?.trained ? "Ready" : "Model Idle");
+  const makeSub = (model, label) => model?.trained ? `Valid across all municipal wards.` : `Requires data feed to initialize ${label}.`;
+
+  return (
+    <div className="ml-dashboard-wrapper pt-24 px-8 pb-12">
+      <div className="ml-main-content space-y-8">
+        
+        {/* Header */}
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
+          <div>
+            <span className="text-[10px] font-black uppercase tracking-widest text-[#2563eb] mb-2 block">Predictive Intelligence Unit</span>
+            <h1 className="text-4xl font-black text-[#1a365d] tracking-tighter leading-none">Civic Volume <span className="opacity-40">Forecasting.</span></h1>
+            <p className="text-sm font-medium text-[#757684] mt-5 max-w-lg">Unified NagarSetu M18 projections based on {stats.total_volume?.toLocaleString()} historical data points.</p>
+          </div>
+          <div className="flex gap-4">
+             <button onClick={autoSync} className="btn-ml-secondary flex items-center gap-2">
+                <span className="material-symbols-outlined text-sm">refresh</span> Refresh
+             </button>
+             <button onClick={trainAllModels} className="btn-ml-primary flex items-center gap-2" disabled={isTrainingAll}>
+                <span className="material-symbols-outlined text-sm">neurology</span> {isTrainingAll ? "Processing..." : "Calibrate M15/M19"}
+             </button>
+          </div>
+        </div>
+
+        {/* AI Performance Status */}
+        <div className="flex flex-wrap gap-4 items-center">
+           <div className="intelligence-pill" title="Processing Engine">
+              <span className="pill-dot"></span>
+              <span className="pill-value">M18 Forecaster</span>
+           </div>
+           <div className="intelligence-pill" title="Model Confidence Index">
+              <span className="pill-icon material-symbols-outlined">bolt</span>
+              <span className="pill-value">{(loginData?.training?.r2_score * 100).toFixed(1)}% Confidence</span>
+           </div>
+           <div className="intelligence-pill" title="Data Pipeline Source">
+              <span className="pill-icon material-symbols-outlined">database</span>
+              <span className="pill-value uppercase text-[10px]">{loginData?.source === "synthetic" ? "Demo Stream" : "Live Pipeline"}</span>
+           </div>
+           <div className="flex-1"></div>
+           <div className="text-[10px] font-black uppercase tracking-widest text-[#1a365d] bg-[#f8fafc] px-4 py-2.5 rounded-xl border border-slate-200 shadow-sm">
+              Critical Accuracy: <span className="text-[#2563eb]">±{loginData?.training?.rmse?.toFixed(2)} Points</span>
+           </div>
+        </div>
+
+        {/* Stats Grid */}
+        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+           {[
+             { label: "Total History", value: stats.total_volume?.toLocaleString(), sub: "Issues parsed" },
+             { label: "Daily Avg", value: stats.avg_daily, sub: "Historical mean" },
+             { label: "Volatility", value: stats.std_daily, sub: "Standard deviation" },
+             { label: "Peak Load", value: stats.max_daily, sub: "Maximum registered" },
+             { label: "Trend Vector", value: stats.trend_direction, sub: "Linear gradient" },
+             { label: "Time Span", value: stats.total_days + "d", sub: "Data horizon" },
+           ].map((s, i) => (
+             <div key={i} className="ml-stat-card border-l-4 border-[#1a365d]/20">
+               <div className="ml-stat-label">{s.label}</div>
+               <div className="ml-stat-value">{s.value || "---"}</div>
+               <div className="ml-stat-sub font-bold">{s.sub}</div>
+             </div>
+           ))}
+        </section>
+
+        {/* ML Model Status */}
+        <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+           <div className="admin-card-ml flex items-center gap-6">
+              <div className="w-16 h-16 rounded-2xl bg-[#f0f4ff] flex items-center justify-center text-[#1a365d]">
+                 <span className="material-symbols-outlined text-3xl">timer_3_alt_1</span>
+              </div>
+              <div className="flex-1">
+                 <h3 className="font-black text-[#1a365d]">M15 — SLA Breach Risk</h3>
+                 <p className="text-xs text-[#757684] font-medium mt-1">{makeSub(mlStatus.m15_sla_breach, "M15")}</p>
+                 <div className="mt-2 flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${mlStatus.m15_sla_breach?.trained ? 'bg-green-500' : 'bg-amber-400'}`}></span>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-[#1a365d]">{makeStatus(mlStatus.m15_sla_breach)}</span>
+                 </div>
+              </div>
+           </div>
+           <div className="admin-card-ml flex items-center gap-6">
+              <div className="w-16 h-16 rounded-2xl bg-[#f0f4ff] flex items-center justify-center text-[#1a365d]">
+                 <span className="material-symbols-outlined text-3xl">engineering</span>
+              </div>
+              <div className="flex-1">
+                 <h3 className="font-black text-[#1a365d]">M19 — Worker Demand</h3>
+                 <p className="text-xs text-[#757684] font-medium mt-1">{makeSub(mlStatus.m19_worker_demand, "M19")}</p>
+                 <div className="mt-2 flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${mlStatus.m19_worker_demand?.trained ? 'bg-green-500' : 'bg-amber-400'}`}></span>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-[#1a365d]">{makeStatus(mlStatus.m19_worker_demand)}</span>
+                 </div>
+              </div>
+           </div>
+        </section>
+
+        {/* Main Chart */}
+        <section className="admin-card-ml">
+           <div className="flex justify-between items-start mb-10">
+              <div>
+                 <h3>📈 Issue Volume Forecasting</h3>
+                 <p className="chart-subtitle-ml">Continuous predictive pipeline showing 30-day anticipatory load with 95% confidence bands.</p>
+              </div>
+           </div>
+           <div className="h-[420px] w-full">
+              <canvas ref={chartRefs.forecast}></canvas>
+           </div>
+        </section>
+
+        {/* Categorical Grid */}
+        <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+           <div className="admin-card-ml">
+              <h3>🏷️ Categorical Equilibrium</h3>
+              <p className="chart-subtitle-ml">Historical distribution of civic issues across all municipal domains.</p>
+              <div className="h-[350px] w-full">
+                 <canvas ref={chartRefs.type}></canvas>
+              </div>
+           </div>
+           <div className="admin-card-ml">
+              <h3>🔮 Projected Category Load</h3>
+              <div className="chart-subtitle-ml">Predicted categorical accumulation for the upcoming 30-day horizon.</div>
+              <div className="h-[350px] w-full">
+                 <canvas ref={chartRefs.typeForecast}></canvas>
+              </div>
+           </div>
+        </section>
+
+        {/* Patterns Grid */}
+        <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+           <div className="admin-card-ml">
+              <h3>📅 Weekly Seasonality</h3>
+              <p className="chart-subtitle-ml">Mean issue density patterns mapped over the 7-day municipal cycle.</p>
+              <div className="h-[300px] w-full">
+                 <canvas ref={chartRefs.dow}></canvas>
+              </div>
+           </div>
+           <div className="admin-card-ml">
+              <h3>📊 Aggregate Accumulation</h3>
+              <p className="chart-subtitle-ml">Total historical volume growth trajectory over the observation period.</p>
+              <div className="h-[300px] w-full">
+                 <canvas ref={chartRefs.cumulative}></canvas>
+              </div>
+           </div>
+        </section>
+
+        <footer className="pt-12 pb-6 border-t border-slate-200 text-center">
+           <p className="text-[11px] font-black uppercase tracking-[0.2em] text-[#757684]">NagarSetu Intelligence Unit &middot; AI Protocol M18 &middot; Predictive Ward Logistics</p>
+        </footer>
+
+      </div>
+    </div>
   );
 }
